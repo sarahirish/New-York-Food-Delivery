@@ -1,0 +1,287 @@
+{
+  const foodorders = FileAttachment("food_order.csv").csv()
+  const aggregatedData = d3.rollups(
+    foodorders,
+    v => ({
+      delivery_time: d3.mean(v, d => d.delivery_time),
+      cost_of_the_order: d3.mean(v, d => d.cost_of_the_order), 
+      prep_time: d3.mean(v, d => d.food_preparation_time)
+    }),
+    d => d.cuisine_type
+  );
+  let formattedData = aggregatedData.map(d => ({
+    cuisine: d[0],
+    delivery_time: d[1].delivery_time,
+    cost_of_the_order: d[1].cost_of_the_order,
+    prep_time: d[1].prep_time
+  }));
+  formattedData.forEach(d => {
+    const denom = d.delivery_time + d.prep_time;
+    d.cost_per_min = (Number.isFinite(d.cost_of_the_order) && denom > 0)
+      ? d.cost_of_the_order / denom
+      : NaN;
+  });
+
+  const sortedData = formattedData.slice().sort((a, b) => a.cost_per_min - b.cost_per_min);
+  
+  const ranked = [...formattedData]
+    .filter(d => Number.isFinite(d.cost_per_min))
+    .sort((a, b) => a.cost_per_min - b.cost_per_min);
+  const rankMap = new Map(ranked.map((d, i) => [d.cuisine, i + 1]));
+  formattedData.forEach(d => d.rank = rankMap.get(d.cuisine) ?? null);
+ const activeMap = Object.fromEntries(formattedData.map(d => [d.cuisine, true]));
+ const cuisineNames = formattedData.map(d => d.cuisine); 
+const mainContainer = d3.create('div');
+
+  const filterContainerDiv = mainContainer.append("div")
+    .style("margin", "10px 0");
+  filterContainerDiv.append("label")
+    .text("Filter by Cuisine:")
+    .style("font-family", "monospace")
+    .style("margin-right", "10px");
+  const dropdown = filterContainerDiv.append("select")
+    .style("font-family", "monospace")
+    .style("padding", "4px 8px");
+
+  dropdown.append("option")
+    .attr("value", "All")
+    .text("All Cuisines");
+
+  dropdown.selectAll("option.cuisine-option")
+    .data(cuisineNames)
+    .enter().append("option")
+    .attr("value", d => d)
+    .text(d => d);
+
+  const width = 700;
+  const height = 600;
+  const margin = 30;
+  const axisCircles = 5;
+
+  const svg = mainContainer.append('svg')
+    .attr('width', width)
+    .attr('height', height + margin*2);
+
+  const containerWidth = width - margin*2;
+  const containerHeight = height - margin*2;
+  const container = svg.append('g')
+    .attr("transform", `translate(${(width/2)+margin-60}, ${(height/2)+margin})`);
+  
+  const axesDomain = ['delivery_time', 'cost_of_the_order', 'prep_time'];
+  const angleSlice = Math.PI*2 / axesDomain.length;
+  const radius = Math.min(containerWidth, containerHeight) / 2;
+
+  const axisGrid = container.append("g").attr("class", "axisWrapper");
+  axisGrid.selectAll(".levels")
+    .data(d3.range(1, axisCircles+1).reverse())
+    .enter().append("circle")
+      .attr("r", d => radius / axisCircles * d)
+      .style("fill", "#CDCDCD")
+      .style("stroke", "#CDCDCD")
+      .style("fill-opacity", 0.1);
+
+  const axis = axisGrid.selectAll(".axis")
+    .data(axesDomain)
+    .enter()
+    .append("g").attr("class", "axis");
+
+  const axisLabels = {
+    'delivery_time': 'Delivery Time (mins)',
+    'cost_of_the_order': 'Cost ($)',
+    'prep_time': 'Prep Time (mins)'
+  };
+
+  axis.append("line")
+    .attr("x1",0).attr("y1",0)
+    .attr("x2",(d,i)=> radius*Math.cos(angleSlice*i - Math.PI/2))
+    .attr("y2",(d,i)=> radius*Math.sin(angleSlice*i - Math.PI/2))
+    .style("stroke","white")
+    .style("stroke-width","2px");
+
+  axis.append("text")
+    .attr("class","legend")
+    .style("font-size","11px")
+    .attr("text-anchor","middle")
+    .attr("font-family","monospace")
+    .attr("dy","0.35em")
+    .attr("x",(d,i)=> radius*1.1*Math.cos(angleSlice*i - Math.PI/2))
+    .attr("y",(d,i)=> radius*1.1*Math.sin(angleSlice*i - Math.PI/2))
+    .text(d => axisLabels[d]);
+
+  const axisScales = {
+    delivery_time: d3.scaleLinear()
+      .domain(d3.extent(formattedData, d => d.delivery_time))
+      .range([0, radius]),
+    cost_of_the_order: d3.scaleLinear()
+      .domain(d3.extent(formattedData, d => d.cost_of_the_order))
+      .range([0, radius]),
+    prep_time: d3.scaleLinear()
+      .domain(d3.extent(formattedData, d => d.prep_time))
+      .range([0, radius])
+  };
+
+  const radarLine = d3.lineRadial()
+    .curve(d3.curveLinearClosed)
+    .radius((value, i) => {
+      const axis = axesDomain[i];
+      return axisScales[axis](value);
+    })
+    .angle((d,i)=> i*angleSlice);
+
+  const cuisineColor = cuisine => cuisinecolors[cuisine]
+  
+  const plots = container.append('g')
+    .selectAll('g')
+    .data(formattedData)
+    .join('g')
+    .attr("data-name", d => d.cuisine)
+    .attr("fill", d => cuisineColor(d.cuisine));
+
+plots.append('path')
+  .attr("d", d => radarLine([d.delivery_time, d.cost_of_the_order, d.prep_time]))
+  .attr("fill", d => cuisineColor(d.cuisine))
+  .attr("fill-opacity",0.1)
+  .attr("stroke", d => cuisineColor(d.cuisine))
+  .attr("stroke-width",2)
+  .style("cursor","pointer")
+  .style("pointer-events","visibleStroke")
+    .on("mouseover", function(event,d){
+      if(!activeMap[d.cuisine]) return;
+      plots.selectAll("path")
+        .transition().duration(150)
+        .style("opacity", p => p.cuisine===d.cuisine ? 1 : 0.15);
+      tooltip.style("opacity",1)
+        .html(`
+          <strong>${d.cuisine}</strong><br>
+          Delivery: ${d.delivery_time.toFixed(1)} min<br>
+          Prep: ${d.prep_time.toFixed(1)} min<br>
+          Cost: $${d.cost_of_the_order.toFixed(2)}<br>
+          Cost/Min: ${d.cost_per_min?.toFixed(3) ?? "N/A"}<br>
+          <b>Rank: ${d.rank ?? "N/A"}</b>
+        `);
+    })
+    .on("mousemove", event => tooltip
+      .style("left", event.pageX+15+"px")
+      .style("top", event.pageY+"px"))
+    .on("mouseout", function(){
+      plots.selectAll("path")
+        .transition().duration(150)
+        .style("opacity",1);
+      tooltip.style("opacity",0);
+    });
+
+  plots.selectAll("circle")
+    .data(d => [d.delivery_time, d.cost_of_the_order, d.prep_time]
+      .map((v,i)=> ({value:v, axisIndex:i, parent:d})))
+    .join("circle")
+    .attr("r",4)
+    .attr("cx", d => axisScales[axesDomain[d.axisIndex]](d.value)*Math.cos(angleSlice*d.axisIndex - Math.PI/2))
+    .attr("cy", d => axisScales[axesDomain[d.axisIndex]](d.value)*Math.sin(angleSlice*d.axisIndex - Math.PI/2))
+    .style("fill-opacity",0.8)
+    .style("pointer-events","all")
+    .on("mouseover", function(event,d){
+      const parent = d.parent;
+      if(!activeMap[parent.cuisine]) return;
+      plots.selectAll("path")
+        .transition().duration(150)
+        .style("opacity", p => p.cuisine===parent.cuisine ? 1 : 0.15);
+      tooltip.style("opacity",1)
+        .html(`
+          <strong>${parent.cuisine}</strong><br>
+          Delivery: ${parent.delivery_time.toFixed(1)} min<br>
+          Prep: ${parent.prep_time.toFixed(1)} min<br>
+          Cost: $${parent.cost_of_the_order.toFixed(2)}<br>
+          Cost/Min: ${parent.cost_per_min?.toFixed(3) ?? "N/A"}<br>
+          <b>Rank: ${parent.rank ?? "N/A"}</b>
+        `);
+    })
+    .on("mousemove", event => tooltip
+      .style("left", event.pageX+15+"px")
+      .style("top", event.pageY+"px"))
+    .on("mouseout", function(){
+      plots.selectAll("path")
+        .transition().duration(150)
+        .style("opacity",1);
+      tooltip.style("opacity",0);
+    });
+
+  svg.append("text")
+    .attr("x", width/2)
+    .attr("y", margin/2)
+    .attr("text-anchor","middle")
+    .style("font-size","18px")
+    .style("font-weight","bold")
+    .text("Cuisine Performance");
+
+  const legend = svg.append("g")
+    .attr("transform", `translate(${width-100},${margin})`);
+
+  legend.append("text")
+  .attr("x", 0)
+  .attr("y", -16)
+  .style("font-size", "12px")
+  .selectAll("tspan")
+  .data(["Cuisine"]) 
+  .enter()
+  .append("tspan")
+    .attr("x", 0)
+    .attr("dy", (d,i) => i === 0 ? 0 : 12) 
+    .text(d => d);
+
+  const legendItems = legend.selectAll(".legend-item")
+    .data(sortedData)
+    .enter().append("g")
+      .attr("class","legend-item")
+      .attr("transform", (d,i)=> `translate(0,${i*20})`);
+
+  legendItems.append("rect")
+    .attr("width",14)
+    .attr("height",14)
+    .attr("fill", d => cuisineColor(d.cuisine));
+
+  legendItems.append("text")
+    .attr("x",18)
+    .attr("y",9)
+    .attr("dy","0.35em")
+    .style("font-size","12px")
+    .text(d=>d.cuisine);
+
+  const updateChartVisibility = (selectedCuisine) => {
+    plots.transition().duration(200)
+      .style("opacity", d => {
+        const isSelected = selectedCuisine === "All" || d.cuisine === selectedCuisine;
+        activeMap[d.cuisine] = isSelected;
+        return isSelected ? 1 : 0.05;
+      });
+
+    legendItems.each(function(d) {
+      const isSelected = selectedCuisine === "All" || d.cuisine === selectedCuisine;
+      const item = d3.select(this);
+      const opacity = selectedCuisine === "All" ? 1 : (isSelected ? 1 : 0.4);
+      item.style("opacity", opacity);
+      item.select("rect").style("opacity", opacity);
+      item.select("text").style("opacity", opacity);
+    });
+  };
+  
+  dropdown.on("change", function() {
+    const selectedCuisine = d3.select(this).property("value");
+    updateChartVisibility(selectedCuisine);
+  });
+  
+
+  const tooltip = d3.select("body")
+    .append("div")
+    .attr("class","radarTooltip")
+    .style("position","absolute")
+    .style("padding","8px 12px")
+    .style("background","white")
+    .style("border","1px solid #aaa")
+    .style("border-radius","4px")
+    .style("pointer-events","none")
+    .style("font-family","monospace")
+    .style("font-size","12px")
+    .style("opacity",0);
+  
+  return mainContainer.node();
+}
