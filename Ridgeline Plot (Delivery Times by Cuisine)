@@ -1,4 +1,5 @@
 {
+  const foodorders = FileAttachment("food_order.csv").csv()
   const cuisineTypes = Array.from(new Set(foodorders.map(d => d.cuisine_type))).sort();
   const totalCuisines = cuisineTypes.length;
   
